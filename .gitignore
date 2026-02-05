@@ -4,3 +4,6 @@ dist/
 *.log
 .env
 .env.local
+
+# local scratch memory (do not commit)
+shred_memory/
