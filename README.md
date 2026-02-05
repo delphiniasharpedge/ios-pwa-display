@@ -7,7 +7,8 @@ iOS Safari 上でPWAとして動作する常時表示ディスプレイアプリ
 - **自動スリープ禁止** — NoSleep.js で画面が消えないように
 - **周囲明るさ推定** — フロントカメラで環境光を検出、画面の明るさ/配色を自動調整
 - **WebSocket メッセージ受信** — サーバーからのメッセージで画面表示を変更
-- **音声通知** — メッセージ受信時にサウンド再生
+- **SSE 電力データ受信（remo-e）** — `power.reading` を SSE で購読して瞬時電力(W)を表示
+- **音声通知** — メッセージ受信/閾値超過時にサウンド再生
 
 ## セットアップ
 
@@ -18,8 +19,11 @@ npm install
 # 開発サーバー起動（フロントエンド）
 npm run dev
 
-# WebSocket サーバー起動（別ターミナル）
+# WebSocket サーバー起動（別ターミナル / 任意）
 npm run server
+
+# remo-e を用意できない時の動作確認用: モックSSEサーバー（別ターミナル）
+npm run mock:sse
 ```
 
 ## 使い方
@@ -30,12 +34,20 @@ npm run server
 http://localhost:3000
 ```
 
-### 2. WebSocket URL を設定
+### 2. WebSocket / SSE URL を設定
 
-画面長押し（またはPC右クリック）で設定パネルを開き、WebSocket URL を入力:
+画面長押し（またはPC右クリック）で設定パネルを開き、URLを入力:
+
+- WebSocket URL（任意・画面メッセージ用）
 
 ```
 ws://localhost:8080
+```
+
+- SSE URL（必須・電力表示用 / remo-e 側）
+
+```
+http://<mac-ip>:8787/events
 ```
 
 ### 3. メッセージを送信
@@ -61,7 +73,29 @@ curl -X POST http://localhost:8080/send \
 
 ブラウザで `http://localhost:8080` を開くと、簡易送信UIが使える。
 
-## メッセージ形式
+## 電力(SSE)インターフェース（合意済み）
+
+PWA は remo-e の SSE を直接購読します。
+
+- Endpoint: `GET http://<mac-ip>:8787/events`
+- Content-Type: `text/event-stream`
+- Event name: `message`
+- Payload:
+
+```ts
+export interface PowerReadingEvent {
+  type: 'power.reading';
+  timestamp: string;  // ISO8601 (RFC3339)
+  watts: number;      // W
+  applianceId: string;
+  nickname: string;
+  sourceHost?: string;
+}
+```
+
+詳細: `DESIGN.md` を参照。
+
+## メッセージ形式（WebSocket）
 
 ```typescript
 interface DisplayMessage {
@@ -115,6 +149,8 @@ ios-pwa-display/
 │   ├── manifest.json
 │   ├── sw.js
 │   └── icons/
+├── scripts/
+│   └── mock-sse-server.ts
 ├── src/
 │   ├── main.ts
 │   ├── controllers/
@@ -123,6 +159,7 @@ ios-pwa-display/
 │   │   ├── nosleep-manager.ts
 │   │   ├── brightness-detector.ts
 │   │   ├── message-client.ts
+│   │   ├── sse-client.ts
 │   │   └── sound-manager.ts
 │   └── styles/
 │       └── main.css
