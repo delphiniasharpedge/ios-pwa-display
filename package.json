@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "server": "tsx server/index.ts"
+    "server": "tsx server/index.ts",
+    "mock:sse": "tsx scripts/mock-sse-server.ts"
   },
   "dependencies": {
     "nosleep.js": "^0.12.0",
