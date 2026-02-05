@@ -156,7 +156,13 @@ function renderPowerReading(power: PowerReadingEvent): void {
   messageContent.style.color = '';
 
   const watts = power.watts;
-  const timestamp = new Date(power.timestamp).toLocaleTimeString('ja-JP');
+  // JST (Asia/Tokyo) で表示
+  const timestamp = new Date(power.timestamp).toLocaleTimeString('ja-JP', {
+    timeZone: 'Asia/Tokyo',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
   
   // 閾値チェックでスタイル変更（2000W以上で警告色）
   const isHigh = watts >= 2000;
