@@ -1,11 +1,12 @@
 :root {
   --ambient-brightness: 0.5;
-  
-  /* 明るさに応じた動的カラー */
-  --bg-color: hsl(0, 0%, calc(var(--ambient-brightness) * 100%));
-  --text-color: hsl(0, 0%, calc((1 - var(--ambient-brightness)) * 100%));
+
+  /* Spec (2026-02): background is fixed black; only text color reacts to brightness. */
+  --ambient-text-color: #ffffff; /* bright → white / dark → gray */
+
+  /* Accent can still be dynamic if we want */
   --accent-color: hsl(210, 100%, calc(40% + var(--ambient-brightness) * 20%));
-  
+
   /* 固定カラー */
   --success-color: #22c55e;
   --warning-color: #f59e0b;
@@ -23,9 +24,9 @@ html, body {
   height: 100%;
   overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background-color: var(--bg-color);
-  color: var(--text-color);
-  transition: background-color 0.5s ease, color 0.5s ease;
+  background-color: #000000;
+  color: var(--ambient-text-color);
+  transition: color 0.5s ease;
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
@@ -162,6 +163,63 @@ html, body {
 @keyframes alertPulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
   50% { box-shadow: 0 0 20px 10px rgba(239, 68, 68, 0.2); }
+}
+
+/* 電力表示 */
+.power-display {
+  text-align: center;
+  /* Avoid jitter/blink on every SSE update */
+  animation: none;
+}
+
+/* Keep number + unit on the same line */
+.power-display .power-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+  width: 100%;
+  padding: 0 1rem;
+  box-sizing: border-box;
+}
+
+.power-display .power-value {
+  /* Make watts big but never overflow the screen */
+  font-size: clamp(5rem, 20vw, 12rem);
+  font-weight: 800;
+  line-height: 0.95;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.power-display .power-unit {
+  font-size: 2rem; /* keep current size */
+  opacity: 0.7;
+}
+
+.power-display .power-timestamp {
+  font-size: 1rem;
+  opacity: 0.5;
+  margin-top: 1rem;
+}
+
+.power-display .power-source {
+  font-size: 0.8rem;
+  opacity: 0.4;
+  margin-top: 0.25rem;
+}
+
+.power-display.high-power .power-value {
+  color: var(--error-color);
+  animation: alertPulse 1s ease-in-out infinite;
+}
+
+/* (power-value uses clamp; no small-screen override needed) */
+@media (max-width: 480px) {
+  .power-display .power-unit {
+    font-size: 1.5rem;
+  }
 }
 
 /* ステータスバー */

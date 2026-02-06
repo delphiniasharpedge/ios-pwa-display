@@ -2,12 +2,12 @@
  * Service Worker - オフラインキャッシュ
  */
 
-const CACHE_NAME = 'ios-pwa-display-v1';
+// Bump this when changing UI behavior so iOS PWA picks up updates.
+const CACHE_NAME = 'ios-pwa-display-v7';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
-  '/src/styles/main.css',
 ];
 
 // インストール時にキャッシュ
@@ -40,6 +40,17 @@ self.addEventListener('fetch', (event) => {
   // WebSocket は除外
   if (event.request.url.startsWith('ws://') || event.request.url.startsWith('wss://')) {
     return;
+  }
+
+  // Always fetch latest config (do not cache) so tuning is easy.
+  try {
+    const url = new URL(event.request.url);
+    if (url.pathname === '/config.json') {
+      event.respondWith(fetch(event.request, { cache: 'no-store' }));
+      return;
+    }
+  } catch {
+    // ignore
   }
 
   event.respondWith(

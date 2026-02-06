@@ -42,6 +42,34 @@ iOS Safari上でPWAとして動作する常時表示ディスプレイアプリ�
 
 ### 3.3 メッセージ受信
 
+#### 3.3.1 電力データ受信（remo-e SSE） — 合意済みインターフェース
+
+PWA は同一LAN上の `remo-e-poc` が提供する **Server-Sent Events (SSE)** を直接購読して、瞬時電力（W）を受信する。
+
+- Endpoint: `GET http://<mac-ip>:8787/events`
+- Content-Type: `text/event-stream`
+- Event name: `message`
+- Payload: JSON（下記スキーマ）
+
+```ts
+// event.data を JSON.parse した結果
+export interface PowerReadingEvent {
+  type: 'power.reading';
+  timestamp: string;  // ISO8601 (RFC3339)
+  watts: number;      // 瞬時電力 (W)
+  applianceId: string;
+  nickname: string;
+  sourceHost?: string;
+}
+```
+
+動作要件:
+- 接続直後に「最後の値（last event）」が即時に流れる（remo-e 側の replay）
+- フォアグラウンド専用（iOS PWAはバックグラウンドで切断される想定）
+- 再接続: `EventSource` の自動再接続に加え、`visibilitychange` で visible 時に再接続を試みる
+
+---
+
 | 方法 | iOS対応 | PWAバックグラウンド | 備考 |
 |------|---------|---------------------|------|
 | **WebSocket** | ✅ 対応 | ❌ 切断される | フォアグラウンド時は安定 |
@@ -616,7 +644,64 @@ ios-pwa-display/
 
 ---
 
-## 12. 今後の拡張案
+## 12. remo-e 連携: SSE インターフェース仕様
+
+### 12.1 概要
+
+remo-e (Nature Remo E 電力モニター) から電力データを SSE で受信し、リアルタイム表示する。
+
+### 12.2 SSE Endpoint (remo-e 側)
+
+| 項目 | 値 |
+|------|-----|
+| URL | `GET http://<mac-ip>:8787/events` |
+| Content-Type | `text/event-stream` |
+| Event name | `message` |
+| CORS | `Access-Control-Allow-Origin: *` |
+
+### 12.3 Event Schema
+
+```typescript
+interface PowerReadingEvent {
+  type: 'power.reading';
+  timestamp: string;    // ISO8601 (RFC3339) e.g. "2026-02-04T23:51:18+09:00"
+  watts: number;        // 瞬時電力 (W), 正=買電, 負=売電
+  applianceId: string;  // Nature API の appliance ID
+  nickname: string;     // e.g. "Remo E"
+  sourceHost?: string;  // e.g. "ai-mac"
+}
+```
+
+### 12.4 接続仕様
+
+- 接続時に **最後の値が即座に送信される** (remo-e の last event replay)
+- 25秒間隔で keep-alive コメント (`: keepalive`)
+- 自動再接続は `EventSource` がネイティブ対応
+- PWA 側で `visibilitychange` 時に再接続チェック
+
+### 12.5 PWA側の実装
+
+```typescript
+const es = new EventSource('http://192.168.1.x:8787/events');
+
+es.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  if (data.type === 'power.reading') {
+    // watts を表示に反映
+    displayWatts(data.watts);
+  }
+};
+```
+
+### 12.6 閾値アラート
+
+PWA 側で閾値 (デフォルト 2000W) を超えた場合:
+- 表示を赤くハイライト
+- アラート音を再生（閾値を超えた瞬間のみ）
+
+---
+
+## 13. 今後の拡張案
 
 - **Push通知**: iOS 16.4+ の Web Push 対応（バックグラウンド通知）
 - **複数デバイス同期**: 同一アカウントの複数端末で同時表示

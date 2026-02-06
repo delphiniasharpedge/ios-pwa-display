@@ -3,49 +3,82 @@
  */
 
 import { NoSleepManager } from '../services/nosleep-manager';
-import { BrightnessDetector, type BrightnessCallback } from '../services/brightness-detector';
+import { BrightnessDetector } from '../services/brightness-detector';
 import { MessageClient, type DisplayMessage, type ConnectionState } from '../services/message-client';
+import { SSEClient, type PowerReadingEvent, type SSEConnectionState } from '../services/sse-client';
 import { SoundManager } from '../services/sound-manager';
+import { clamp01, lerpColor, normalizeBrightness } from '../utils/brightness';
 
 export interface DisplayConfig {
   wsUrl: string;
+  sseUrl: string;
   brightnessMode: 'auto' | 'light' | 'dark';
+  alertThresholdWatts: number; // この値を超えたらアラート
+
+  // Brightness calibration (raw 0..1 -> normalized 0..1)
+  brightnessMinThreshold: number; // raw <= this => 0%
+  brightnessMaxThreshold: number; // raw >= this => 100%
+
+  // Text color range (normalized brightness 0..1)
+  textColorMin: string; // dark
+  textColorMax: string; // bright
+
+  // LocalStorage migration/versioning
+  configVersion?: number;
 }
 
 export interface DisplayState {
   initialized: boolean;
-  connected: ConnectionState;
+  wsConnected: ConnectionState;
+  sseConnected: SSEConnectionState;
   brightnessMode: 'auto' | 'light' | 'dark';
   ambientLevel: number;
   cameraAvailable: boolean;
   currentMessage: DisplayMessage | null;
+  currentPower: PowerReadingEvent | null;
 }
 
 export type StateChangeHandler = (state: DisplayState) => void;
 
 const STORAGE_KEY = 'ios-pwa-display-config';
+const DEFAULT_ALERT_THRESHOLD = 2000; // 2000W
+
+const DEFAULT_BRIGHTNESS_MIN_THRESHOLD = 0.2;
+const DEFAULT_BRIGHTNESS_MAX_THRESHOLD = 0.8;
+const DEFAULT_TEXT_COLOR_MIN = '#4b5563';
+const DEFAULT_TEXT_COLOR_MAX = '#ffffff';
 
 export class DisplayController {
   private noSleep: NoSleepManager;
   private brightnessDetector: BrightnessDetector;
   private messageClient: MessageClient;
+  private sseClient: SSEClient;
   private soundManager: SoundManager;
+
+  // Configurable brightness/text settings
+  private brightnessMinThreshold: number;
+  private brightnessMaxThreshold: number;
+  private textColorMin: string;
+  private textColorMax: string;
 
   private stateHandlers = new Set<StateChangeHandler>();
   private messageTimeoutId: number | null = null;
+  private alertThresholdWatts: number;
 
   private _state: DisplayState = {
     initialized: false,
-    connected: 'disconnected',
+    wsConnected: 'disconnected',
+    sseConnected: 'disconnected',
     brightnessMode: 'auto',
     ambientLevel: 0.5,
     cameraAvailable: false,
     currentMessage: null,
+    currentPower: null,
   };
 
-  constructor() {
-    // 設定を復元
-    const savedConfig = this.loadConfig();
+  constructor(baseConfig?: Partial<DisplayConfig>) {
+    // 設定を復元（baseConfig -> localStorage）
+    const savedConfig = this.loadConfig(baseConfig);
 
     this.noSleep = new NoSleepManager();
     this.brightnessDetector = new BrightnessDetector({
@@ -54,18 +87,34 @@ export class DisplayController {
       smoothingWindow: 5,
     });
     this.messageClient = new MessageClient(savedConfig.wsUrl);
+    this.sseClient = new SSEClient(savedConfig.sseUrl);
     this.soundManager = new SoundManager();
 
     this._state.brightnessMode = savedConfig.brightnessMode;
+    this.alertThresholdWatts = savedConfig.alertThresholdWatts;
 
-    // 接続状態の変更を監視
+    this.brightnessMinThreshold = savedConfig.brightnessMinThreshold;
+    this.brightnessMaxThreshold = savedConfig.brightnessMaxThreshold;
+    this.textColorMin = savedConfig.textColorMin;
+    this.textColorMax = savedConfig.textColorMax;
+
+    // WebSocket 接続状態の変更を監視
     this.messageClient.onConnectionChange((state) => {
-      this._state.connected = state;
+      this._state.wsConnected = state;
       this.notifyStateChange();
     });
 
-    // メッセージの受信を監視
+    // WebSocket メッセージの受信を監視
     this.messageClient.onMessage((msg) => this.handleMessage(msg));
+
+    // SSE 接続状態の変更を監視
+    this.sseClient.onConnectionChange((state) => {
+      this._state.sseConnected = state;
+      this.notifyStateChange();
+    });
+
+    // SSE 電力データの受信を監視
+    this.sseClient.onPowerReading((event) => this.handlePowerReading(event));
   }
 
   get state(): DisplayState {
@@ -76,13 +125,26 @@ export class DisplayController {
     return this.messageClient.wsUrl;
   }
 
+  get sseUrl(): string {
+    return this.sseClient.sseUrl;
+  }
+
   /**
    * 設定を保存
    */
   private saveConfig(): void {
     const config: DisplayConfig = {
       wsUrl: this.messageClient.wsUrl,
+      sseUrl: this.sseClient.sseUrl,
       brightnessMode: this._state.brightnessMode,
+      alertThresholdWatts: this.alertThresholdWatts,
+
+      brightnessMinThreshold: this.brightnessMinThreshold,
+      brightnessMaxThreshold: this.brightnessMaxThreshold,
+      textColorMin: this.textColorMin,
+      textColorMax: this.textColorMax,
+
+      configVersion: 2,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
   }
@@ -90,20 +152,61 @@ export class DisplayController {
   /**
    * 設定を読み込み
    */
-  private loadConfig(): DisplayConfig {
+  private loadConfig(baseConfig?: Partial<DisplayConfig>): DisplayConfig {
+    const base: DisplayConfig = {
+      wsUrl: baseConfig?.wsUrl?.trim?.() || '',
+      sseUrl: (baseConfig?.sseUrl || '/events').trim(),
+      brightnessMode: baseConfig?.brightnessMode || 'auto',
+      alertThresholdWatts: baseConfig?.alertThresholdWatts ?? DEFAULT_ALERT_THRESHOLD,
+
+      brightnessMinThreshold: baseConfig?.brightnessMinThreshold ?? DEFAULT_BRIGHTNESS_MIN_THRESHOLD,
+      brightnessMaxThreshold: baseConfig?.brightnessMaxThreshold ?? DEFAULT_BRIGHTNESS_MAX_THRESHOLD,
+      textColorMin: baseConfig?.textColorMin ?? DEFAULT_TEXT_COLOR_MIN,
+      textColorMax: baseConfig?.textColorMax ?? DEFAULT_TEXT_COLOR_MAX,
+    };
+
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        return JSON.parse(saved);
+        const config = JSON.parse(saved);
+        const version = Number(config.configVersion || 1);
+
+        // Default to same-origin SSE so it works with HTTPS hosting (e.g. Tailscale Serve).
+        // Migration: if an old config points directly to http://<host>:8787/events and we're
+        // currently on HTTPS, switch to same-origin /events to avoid mixed content.
+        let sseUrl = (config.sseUrl || '').trim();
+        if (!sseUrl) {
+          sseUrl = '/events';
+        } else if (
+          version < 2 &&
+          typeof window !== 'undefined' &&
+          window.location?.protocol === 'https:' &&
+          /^http:\/\//.test(sseUrl)
+        ) {
+          // v1 -> v2 migration: avoid mixed content when the app itself is served over HTTPS.
+          sseUrl = '/events';
+        }
+
+        return {
+          ...base,
+          wsUrl: (config.wsUrl || base.wsUrl).trim(),
+          sseUrl,
+          brightnessMode: config.brightnessMode || base.brightnessMode,
+          alertThresholdWatts: config.alertThresholdWatts ?? base.alertThresholdWatts,
+
+          brightnessMinThreshold: config.brightnessMinThreshold ?? base.brightnessMinThreshold,
+          brightnessMaxThreshold: config.brightnessMaxThreshold ?? base.brightnessMaxThreshold,
+          textColorMin: config.textColorMin ?? base.textColorMin,
+          textColorMax: config.textColorMax ?? base.textColorMax,
+
+          configVersion: 2,
+        };
       }
     } catch (err) {
       console.warn('[DisplayController] Failed to load config:', err);
     }
     // デフォルト設定
-    return {
-      wsUrl: '',
-      brightnessMode: 'auto',
-    };
+    return base;
   }
 
   /**
@@ -113,10 +216,37 @@ export class DisplayController {
     if (config.wsUrl !== undefined) {
       this.messageClient.wsUrl = config.wsUrl;
     }
+    if (config.sseUrl !== undefined) {
+      this.sseClient.sseUrl = config.sseUrl;
+      // SSE URL が設定されたら接続開始
+      if (config.sseUrl && this._state.initialized) {
+        this.sseClient.connect();
+      }
+    }
     if (config.brightnessMode !== undefined) {
       this._state.brightnessMode = config.brightnessMode;
       this.applyBrightness(this._state.ambientLevel);
     }
+    if (config.alertThresholdWatts !== undefined) {
+      this.alertThresholdWatts = config.alertThresholdWatts;
+    }
+
+    if (config.brightnessMinThreshold !== undefined) {
+      this.brightnessMinThreshold = config.brightnessMinThreshold;
+    }
+    if (config.brightnessMaxThreshold !== undefined) {
+      this.brightnessMaxThreshold = config.brightnessMaxThreshold;
+    }
+    if (config.textColorMin !== undefined) {
+      this.textColorMin = config.textColorMin;
+    }
+    if (config.textColorMax !== undefined) {
+      this.textColorMax = config.textColorMax;
+    }
+
+    // Re-apply current brightness after config changes.
+    this.applyBrightness(this._state.ambientLevel);
+
     this.saveConfig();
     this.notifyStateChange();
   }
@@ -137,7 +267,8 @@ export class DisplayController {
 
     // 3. 明るさ検出を開始（カメラ許可を求める）
     if (this._state.brightnessMode === 'auto') {
-      const available = await this.brightnessDetector.start((level) => {
+      const available = await this.brightnessDetector.start((rawLevel) => {
+        const level = normalizeBrightness(rawLevel, this.brightnessMinThreshold, this.brightnessMaxThreshold);
         this._state.ambientLevel = level;
         this.applyBrightness(level);
         this.notifyStateChange();
@@ -146,16 +277,20 @@ export class DisplayController {
 
       if (!available) {
         console.log('[DisplayController] Camera not available, using manual mode');
-        // フォールバック: 時間帯に基づく自動切り替え
         this.applyTimeBasedBrightness();
       }
     } else {
       this.applyBrightness(this._state.brightnessMode === 'light' ? 1 : 0);
     }
 
-    // 4. WebSocket 接続を開始
+    // 4. WebSocket 接続を開始（設定されていれば）
     if (this.messageClient.wsUrl) {
       this.messageClient.connect();
+    }
+
+    // 5. SSE 接続を開始（設定されていれば）
+    if (this.sseClient.sseUrl) {
+      this.sseClient.connect();
     }
 
     this._state.initialized = true;
@@ -163,6 +298,8 @@ export class DisplayController {
 
     console.log('[DisplayController] Initialized');
   }
+
+  // Brightness helpers are implemented in src/utils/brightness.ts
 
   /**
    * 明るさを適用
@@ -172,21 +309,25 @@ export class DisplayController {
 
     switch (this._state.brightnessMode) {
       case 'light':
-        effectiveLevel = 0.9;
+        effectiveLevel = 1;
         break;
       case 'dark':
-        effectiveLevel = 0.1;
+        effectiveLevel = 0;
         break;
       case 'auto':
       default:
-        effectiveLevel = level;
+        effectiveLevel = clamp01(level);
     }
 
-    // CSS変数を更新
     document.documentElement.style.setProperty(
       '--ambient-brightness',
       effectiveLevel.toFixed(2)
     );
+
+    // Spec: background stays black; only text color changes.
+    // Color is interpolated between min..max by brightness.
+    const textColor = lerpColor(this.textColorMin, this.textColorMax, effectiveLevel);
+    document.documentElement.style.setProperty('--ambient-text-color', textColor);
   }
 
   /**
@@ -194,13 +335,11 @@ export class DisplayController {
    */
   private applyTimeBasedBrightness(): void {
     const hour = new Date().getHours();
-    // 6時〜18時は明るめ、それ以外は暗め
     const level = (hour >= 6 && hour < 18) ? 0.7 : 0.2;
     this._state.ambientLevel = level;
     this.applyBrightness(level);
     this.notifyStateChange();
 
-    // 1時間ごとに更新
     setInterval(() => {
       if (this._state.brightnessMode === 'auto' && !this._state.cameraAvailable) {
         this.applyTimeBasedBrightness();
@@ -209,39 +348,52 @@ export class DisplayController {
   }
 
   /**
-   * メッセージを処理
+   * 電力データを処理
+   */
+  private handlePowerReading(event: PowerReadingEvent): void {
+    console.log('[DisplayController] Power reading:', event.watts, 'W');
+
+    const previousPower = this._state.currentPower;
+    this._state.currentPower = event;
+
+    // 閾値チェック: 超えた瞬間にアラート音
+    if (event.watts >= this.alertThresholdWatts) {
+      // 前回が閾値未満、または初回の場合のみ音を鳴らす
+      if (!previousPower || previousPower.watts < this.alertThresholdWatts) {
+        this.soundManager.play('alert');
+      }
+    }
+
+    this.notifyStateChange();
+  }
+
+  /**
+   * WebSocket メッセージを処理
    */
   private handleMessage(message: DisplayMessage): void {
     console.log('[DisplayController] Handling message:', message);
 
-    // 前のタイマーをクリア
     if (this.messageTimeoutId) {
       clearTimeout(this.messageTimeoutId);
       this.messageTimeoutId = null;
     }
 
-    // クリアメッセージ
     if (message.type === 'clear') {
       this._state.currentMessage = null;
       this.notifyStateChange();
       return;
     }
 
-    // 設定メッセージ
     if (message.type === 'config') {
-      // サーバーからの設定変更（将来用）
       return;
     }
 
-    // 通常メッセージ
     this._state.currentMessage = message;
 
-    // サウンド再生
     if (message.sound && message.sound !== 'none') {
       this.soundManager.play(message.sound);
     }
 
-    // 一定時間後にクリア
     if (message.duration && message.duration > 0) {
       this.messageTimeoutId = window.setTimeout(() => {
         if (this._state.currentMessage === message) {
@@ -259,7 +411,6 @@ export class DisplayController {
    */
   onStateChange(handler: StateChangeHandler): () => void {
     this.stateHandlers.add(handler);
-    // 現在の状態を即座に通知
     handler(this.state);
     return () => this.stateHandlers.delete(handler);
   }
@@ -279,6 +430,7 @@ export class DisplayController {
     this.noSleep.disable();
     this.brightnessDetector.stop();
     this.messageClient.disconnect();
+    this.sseClient.disconnect();
     if (this.messageTimeoutId) {
       clearTimeout(this.messageTimeoutId);
     }
