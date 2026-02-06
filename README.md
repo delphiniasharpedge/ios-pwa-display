@@ -12,6 +12,8 @@ iOS Safari 上でPWAとして動作する常時表示ディスプレイアプリ
 
 ## セットアップ
 
+環境構築/運用手順（macOS + iOS + Tailscale Serve）: **[SETUP.md](./SETUP.md)**
+
 ```bash
 # 依存関係インストール
 npm install
