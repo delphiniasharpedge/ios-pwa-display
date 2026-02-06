@@ -7,6 +7,7 @@ import { BrightnessDetector } from '../services/brightness-detector';
 import { MessageClient, type DisplayMessage, type ConnectionState } from '../services/message-client';
 import { SSEClient, type PowerReadingEvent, type SSEConnectionState } from '../services/sse-client';
 import { SoundManager } from '../services/sound-manager';
+import { clamp01, lerpColor, normalizeBrightness } from '../utils/brightness';
 
 export interface DisplayConfig {
   wsUrl: string;
@@ -21,6 +22,9 @@ export interface DisplayConfig {
   // Text color range (normalized brightness 0..1)
   textColorMin: string; // dark
   textColorMax: string; // bright
+
+  // LocalStorage migration/versioning
+  configVersion?: number;
 }
 
 export interface DisplayState {
@@ -139,6 +143,8 @@ export class DisplayController {
       brightnessMaxThreshold: this.brightnessMaxThreshold,
       textColorMin: this.textColorMin,
       textColorMax: this.textColorMax,
+
+      configVersion: 2,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
   }
@@ -163,6 +169,7 @@ export class DisplayController {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const config = JSON.parse(saved);
+        const version = Number(config.configVersion || 1);
 
         // Default to same-origin SSE so it works with HTTPS hosting (e.g. Tailscale Serve).
         // Migration: if an old config points directly to http://<host>:8787/events and we're
@@ -171,10 +178,12 @@ export class DisplayController {
         if (!sseUrl) {
           sseUrl = '/events';
         } else if (
+          version < 2 &&
           typeof window !== 'undefined' &&
           window.location?.protocol === 'https:' &&
-          /^http:\/\/[^\s/]+:8787\/events(\?.*)?$/.test(sseUrl)
+          /^http:\/\//.test(sseUrl)
         ) {
+          // v1 -> v2 migration: avoid mixed content when the app itself is served over HTTPS.
           sseUrl = '/events';
         }
 
@@ -189,6 +198,8 @@ export class DisplayController {
           brightnessMaxThreshold: config.brightnessMaxThreshold ?? base.brightnessMaxThreshold,
           textColorMin: config.textColorMin ?? base.textColorMin,
           textColorMax: config.textColorMax ?? base.textColorMax,
+
+          configVersion: 2,
         };
       }
     } catch (err) {
@@ -257,7 +268,7 @@ export class DisplayController {
     // 3. 明るさ検出を開始（カメラ許可を求める）
     if (this._state.brightnessMode === 'auto') {
       const available = await this.brightnessDetector.start((rawLevel) => {
-        const level = this.normalizeBrightness(rawLevel);
+        const level = normalizeBrightness(rawLevel, this.brightnessMinThreshold, this.brightnessMaxThreshold);
         this._state.ambientLevel = level;
         this.applyBrightness(level);
         this.notifyStateChange();
@@ -288,49 +299,7 @@ export class DisplayController {
     console.log('[DisplayController] Initialized');
   }
 
-  private clamp01(v: number): number {
-    if (Number.isNaN(v)) return 0;
-    return Math.max(0, Math.min(1, v));
-  }
-
-  private normalizeBrightness(raw: number): number {
-    const min = this.brightnessMinThreshold;
-    const max = this.brightnessMaxThreshold;
-    if (max <= min) return this.clamp01(raw);
-    const t = (raw - min) / (max - min);
-    return this.clamp01(t);
-  }
-
-  private parseHexColor(hex: string): { r: number; g: number; b: number } {
-    const s = hex.trim().replace(/^#/, '');
-    const v = s.length === 3
-      ? s.split('').map((c) => c + c).join('')
-      : s;
-    if (!/^[0-9a-fA-F]{6}$/.test(v)) {
-      // fallback to white
-      return { r: 255, g: 255, b: 255 };
-    }
-    const n = parseInt(v, 16);
-    return {
-      r: (n >> 16) & 0xff,
-      g: (n >> 8) & 0xff,
-      b: n & 0xff,
-    };
-  }
-
-  private lerp(a: number, b: number, t: number): number {
-    return a + (b - a) * t;
-  }
-
-  private lerpColor(minHex: string, maxHex: string, t: number): string {
-    const a = this.parseHexColor(minHex);
-    const b = this.parseHexColor(maxHex);
-    const tt = this.clamp01(t);
-    const r = Math.round(this.lerp(a.r, b.r, tt));
-    const g = Math.round(this.lerp(a.g, b.g, tt));
-    const bb = Math.round(this.lerp(a.b, b.b, tt));
-    return `rgb(${r}, ${g}, ${bb})`;
-  }
+  // Brightness helpers are implemented in src/utils/brightness.ts
 
   /**
    * 明るさを適用
@@ -347,7 +316,7 @@ export class DisplayController {
         break;
       case 'auto':
       default:
-        effectiveLevel = this.clamp01(level);
+        effectiveLevel = clamp01(level);
     }
 
     document.documentElement.style.setProperty(
@@ -357,7 +326,7 @@ export class DisplayController {
 
     // Spec: background stays black; only text color changes.
     // Color is interpolated between min..max by brightness.
-    const textColor = this.lerpColor(this.textColorMin, this.textColorMax, effectiveLevel);
+    const textColor = lerpColor(this.textColorMin, this.textColorMax, effectiveLevel);
     document.documentElement.style.setProperty('--ambient-text-color', textColor);
   }
 

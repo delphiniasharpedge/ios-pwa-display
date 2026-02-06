@@ -19,6 +19,7 @@ import { createServer, IncomingMessage, ServerResponse, request as httpRequest }
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import net from 'node:net';
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const REMOE_SSE_TARGET = process.env.REMOE_SSE_TARGET || 'http://127.0.0.1:8787/events';
@@ -29,6 +30,34 @@ const distDir = path.resolve(__dirname, '..', 'dist');
 
 // 接続中のクライアント
 const clients = new Set<WebSocket>();
+
+function checkUpstreamReachable(): void {
+  try {
+    const u = new URL(REMOE_SSE_TARGET);
+    const host = u.hostname;
+    const port = Number(u.port || (u.protocol === 'https:' ? 443 : 80));
+
+    const socket = net.connect({ host, port });
+    const timeoutMs = 700;
+
+    const done = (ok: boolean, msg?: string) => {
+      socket.removeAllListeners();
+      socket.end();
+      socket.destroy();
+      if (!ok) {
+        console.warn(`[warn] REMOE_SSE_TARGET is not reachable: ${REMOE_SSE_TARGET}${msg ? ' (' + msg + ')' : ''}`);
+        console.warn('[warn] /events will return 502 until remo-e is running');
+      }
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.on('connect', () => done(true));
+    socket.on('timeout', () => done(false, `timeout ${timeoutMs}ms`));
+    socket.on('error', (err) => done(false, err instanceof Error ? err.message : String(err)));
+  } catch (err) {
+    console.warn('[warn] invalid REMOE_SSE_TARGET:', REMOE_SSE_TARGET, err);
+  }
+}
 
 function hasDist(): boolean {
   try {
@@ -210,6 +239,7 @@ function proxyRemoESSE(req: IncomingMessage, res: ServerResponse): void {
   );
 
   upstream.on('error', (err) => {
+    console.error('[SSE proxy] upstream error:', err);
     res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('upstream error: ' + (err instanceof Error ? err.message : String(err)));
   });
@@ -251,7 +281,8 @@ const httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
         broadcast(message);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, clients: clients.size }));
-      } catch {
+      } catch (err) {
+        console.error('[HTTP] /send invalid JSON:', err);
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Invalid JSON' }));
       }
@@ -363,4 +394,7 @@ httpServer.listen(PORT, HOST, () => {
 ║    POST /send    - Send message                ║
 ╚════════════════════════════════════════════════╝
   `);
+
+  console.log('[info] REMOE_SSE_TARGET:', REMOE_SSE_TARGET);
+  checkUpstreamReachable();
 });
