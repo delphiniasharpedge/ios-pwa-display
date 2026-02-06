@@ -451,9 +451,12 @@ export class DisplayController {
   }
 
   private announceHighAlert(): void {
-    if (!this.alertAnnounceEnabled) return;
-
     const msg = (this.alertAnnounceMessage || '').trim();
+
+    // Always play a chime as an attention grabber.
+    this.soundManager.play('chime');
+
+    if (!this.alertAnnounceEnabled) return;
     if (!msg) return;
 
     this.soundManager.announce(msg);
@@ -463,12 +466,8 @@ export class DisplayController {
   private startHighAlert(): void {
     this.alertState = 'high';
 
-    // Immediate announcement when entering HIGH.
-    if (this.alertAnnounceEnabled) {
-      this.announceHighAlert();
-    } else {
-      this.soundManager.play('chime');
-    }
+    // Immediate alert when entering HIGH.
+    this.announceHighAlert();
 
     this.refreshHighAlertTimer();
   }
@@ -515,12 +514,8 @@ export class DisplayController {
       }
 
       if (this.alertState === 'high') {
-        if (this.alertAnnounceEnabled) {
-          // Repeat announcement while HIGH.
-          this.announceHighAlert();
-        } else {
-          this.soundManager.play('chime');
-        }
+        // Repeat while HIGH.
+        this.announceHighAlert();
       }
     }, intervalMs);
   }

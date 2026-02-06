@@ -18,6 +18,28 @@ export class SoundManager {
     }
   }
 
+  private primeSpeech(): void {
+    if (!('speechSynthesis' in window)) return;
+    try {
+      // Load voices list on user gesture.
+      window.speechSynthesis.getVoices();
+      // Some iOS versions require speak to be called once after a gesture.
+      const u = new SpeechSynthesisUtterance('');
+      u.lang = 'ja-JP';
+      u.volume = 0;
+      window.speechSynthesis.speak(u);
+      window.setTimeout(() => {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {
+          // ignore
+        }
+      }, 50);
+    } catch {
+      // ignore
+    }
+  }
+
   announce(text: string): void {
     if (!this._unlocked) {
       console.warn('[SoundManager] Not unlocked yet');
@@ -33,11 +55,20 @@ export class SoundManager {
     if (this.isSpeaking()) return;
 
     try {
+      // Cancel any queued utterances.
+      window.speechSynthesis.cancel();
+
       const u = new SpeechSynthesisUtterance(text);
       u.lang = 'ja-JP';
       u.rate = 1.0;
       u.pitch = 1.0;
       u.volume = 1.0;
+
+      // Prefer a ja-JP voice if available.
+      const voices = window.speechSynthesis.getVoices?.() || [];
+      const ja = voices.find(v => v.lang?.toLowerCase?.().startsWith('ja'));
+      if (ja) u.voice = ja;
+
       window.speechSynthesis.speak(u);
     } catch (err) {
       console.warn('[SoundManager] Failed to announce:', err);
@@ -138,6 +169,9 @@ export class SoundManager {
 
       // 内蔵サウンドをロード
       await this.loadBuiltinSounds();
+
+      // iOS Safari/PWA: prime speech synthesis on user gesture (best-effort)
+      this.primeSpeech();
 
       this._unlocked = true;
       console.log('[SoundManager] Unlocked');
