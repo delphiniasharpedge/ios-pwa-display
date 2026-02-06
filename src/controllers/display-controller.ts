@@ -13,7 +13,12 @@ export interface DisplayConfig {
   wsUrl: string;
   sseUrl: string;
   brightnessMode: 'auto' | 'light' | 'dark';
-  alertThresholdWatts: number; // この値を超えたらアラート
+
+  // High wattage alert
+  alertThresholdWatts: number; // watts >= threshold => HIGH
+  alertRepeatIntervalSec: number; // while HIGH, repeat chime at this interval
+  alertStaleStopSec: number; // stop repeating if no readings for this long
+  alertRecoveryMarginWatts: number; // recovery when watts < threshold - margin
 
   // Brightness calibration (raw 0..1 -> normalized 0..1)
   brightnessMinThreshold: number; // raw <= this => 0%
@@ -41,7 +46,11 @@ export interface DisplayState {
 export type StateChangeHandler = (state: DisplayState) => void;
 
 const STORAGE_KEY = 'ios-pwa-display-config';
-const DEFAULT_ALERT_THRESHOLD = 2000; // 2000W
+// High wattage alert defaults
+const DEFAULT_ALERT_THRESHOLD_WATTS = 1000;
+const DEFAULT_ALERT_REPEAT_INTERVAL_SEC = 10;
+const DEFAULT_ALERT_STALE_STOP_SEC = 60;
+const DEFAULT_ALERT_RECOVERY_MARGIN_WATTS = 0;
 
 const DEFAULT_BRIGHTNESS_MIN_THRESHOLD = 0.2;
 const DEFAULT_BRIGHTNESS_MAX_THRESHOLD = 0.8;
@@ -55,6 +64,12 @@ export class DisplayController {
   private sseClient: SSEClient;
   private soundManager: SoundManager;
 
+  // Configurable alert settings
+  private alertThresholdWatts: number;
+  private alertRepeatIntervalSec: number;
+  private alertStaleStopSec: number;
+  private alertRecoveryMarginWatts: number;
+
   // Configurable brightness/text settings
   private brightnessMinThreshold: number;
   private brightnessMaxThreshold: number;
@@ -63,7 +78,11 @@ export class DisplayController {
 
   private stateHandlers = new Set<StateChangeHandler>();
   private messageTimeoutId: number | null = null;
-  private alertThresholdWatts: number;
+
+  // High wattage alert runtime
+  private alertState: 'normal' | 'high' = 'normal';
+  private alertTimerId: number | null = null;
+  private lastReadingAtMs: number = 0;
 
   private _state: DisplayState = {
     initialized: false,
@@ -91,7 +110,11 @@ export class DisplayController {
     this.soundManager = new SoundManager();
 
     this._state.brightnessMode = savedConfig.brightnessMode;
+
     this.alertThresholdWatts = savedConfig.alertThresholdWatts;
+    this.alertRepeatIntervalSec = savedConfig.alertRepeatIntervalSec;
+    this.alertStaleStopSec = savedConfig.alertStaleStopSec;
+    this.alertRecoveryMarginWatts = savedConfig.alertRecoveryMarginWatts;
 
     this.brightnessMinThreshold = savedConfig.brightnessMinThreshold;
     this.brightnessMaxThreshold = savedConfig.brightnessMaxThreshold;
@@ -110,6 +133,12 @@ export class DisplayController {
     // SSE 接続状態の変更を監視
     this.sseClient.onConnectionChange((state) => {
       this._state.sseConnected = state;
+
+      // If SSE disconnects, stop repeating alert to avoid endless noise.
+      if (state === 'disconnected') {
+        this.stopHighAlert('sse-disconnected');
+      }
+
       this.notifyStateChange();
     });
 
@@ -129,6 +158,14 @@ export class DisplayController {
     return this.sseClient.sseUrl;
   }
 
+  getAlertThresholdWatts(): number {
+    return this.alertThresholdWatts;
+  }
+
+  getAlertRepeatIntervalSec(): number {
+    return this.alertRepeatIntervalSec;
+  }
+
   /**
    * 設定を保存
    */
@@ -137,14 +174,18 @@ export class DisplayController {
       wsUrl: this.messageClient.wsUrl,
       sseUrl: this.sseClient.sseUrl,
       brightnessMode: this._state.brightnessMode,
+
       alertThresholdWatts: this.alertThresholdWatts,
+      alertRepeatIntervalSec: this.alertRepeatIntervalSec,
+      alertStaleStopSec: this.alertStaleStopSec,
+      alertRecoveryMarginWatts: this.alertRecoveryMarginWatts,
 
       brightnessMinThreshold: this.brightnessMinThreshold,
       brightnessMaxThreshold: this.brightnessMaxThreshold,
       textColorMin: this.textColorMin,
       textColorMax: this.textColorMax,
 
-      configVersion: 2,
+      configVersion: 3,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
   }
@@ -157,12 +198,18 @@ export class DisplayController {
       wsUrl: baseConfig?.wsUrl?.trim?.() || '',
       sseUrl: (baseConfig?.sseUrl || '/events').trim(),
       brightnessMode: baseConfig?.brightnessMode || 'auto',
-      alertThresholdWatts: baseConfig?.alertThresholdWatts ?? DEFAULT_ALERT_THRESHOLD,
+
+      alertThresholdWatts: baseConfig?.alertThresholdWatts ?? DEFAULT_ALERT_THRESHOLD_WATTS,
+      alertRepeatIntervalSec: baseConfig?.alertRepeatIntervalSec ?? DEFAULT_ALERT_REPEAT_INTERVAL_SEC,
+      alertStaleStopSec: baseConfig?.alertStaleStopSec ?? DEFAULT_ALERT_STALE_STOP_SEC,
+      alertRecoveryMarginWatts: baseConfig?.alertRecoveryMarginWatts ?? DEFAULT_ALERT_RECOVERY_MARGIN_WATTS,
 
       brightnessMinThreshold: baseConfig?.brightnessMinThreshold ?? DEFAULT_BRIGHTNESS_MIN_THRESHOLD,
       brightnessMaxThreshold: baseConfig?.brightnessMaxThreshold ?? DEFAULT_BRIGHTNESS_MAX_THRESHOLD,
       textColorMin: baseConfig?.textColorMin ?? DEFAULT_TEXT_COLOR_MIN,
       textColorMax: baseConfig?.textColorMax ?? DEFAULT_TEXT_COLOR_MAX,
+
+      configVersion: 3,
     };
 
     try {
@@ -192,14 +239,18 @@ export class DisplayController {
           wsUrl: (config.wsUrl || base.wsUrl).trim(),
           sseUrl,
           brightnessMode: config.brightnessMode || base.brightnessMode,
+
           alertThresholdWatts: config.alertThresholdWatts ?? base.alertThresholdWatts,
+          alertRepeatIntervalSec: config.alertRepeatIntervalSec ?? base.alertRepeatIntervalSec,
+          alertStaleStopSec: config.alertStaleStopSec ?? base.alertStaleStopSec,
+          alertRecoveryMarginWatts: config.alertRecoveryMarginWatts ?? base.alertRecoveryMarginWatts,
 
           brightnessMinThreshold: config.brightnessMinThreshold ?? base.brightnessMinThreshold,
           brightnessMaxThreshold: config.brightnessMaxThreshold ?? base.brightnessMaxThreshold,
           textColorMin: config.textColorMin ?? base.textColorMin,
           textColorMax: config.textColorMax ?? base.textColorMax,
 
-          configVersion: 2,
+          configVersion: 3,
         };
       }
     } catch (err) {
@@ -227,8 +278,22 @@ export class DisplayController {
       this._state.brightnessMode = config.brightnessMode;
       this.applyBrightness(this._state.ambientLevel);
     }
+    let alertConfigChanged = false;
     if (config.alertThresholdWatts !== undefined) {
       this.alertThresholdWatts = config.alertThresholdWatts;
+      alertConfigChanged = true;
+    }
+    if (config.alertRepeatIntervalSec !== undefined) {
+      this.alertRepeatIntervalSec = config.alertRepeatIntervalSec;
+      alertConfigChanged = true;
+    }
+    if (config.alertStaleStopSec !== undefined) {
+      this.alertStaleStopSec = config.alertStaleStopSec;
+      alertConfigChanged = true;
+    }
+    if (config.alertRecoveryMarginWatts !== undefined) {
+      this.alertRecoveryMarginWatts = config.alertRecoveryMarginWatts;
+      alertConfigChanged = true;
     }
 
     if (config.brightnessMinThreshold !== undefined) {
@@ -246,6 +311,11 @@ export class DisplayController {
 
     // Re-apply current brightness after config changes.
     this.applyBrightness(this._state.ambientLevel);
+
+    // Restart repeating alert timer if needed.
+    if (alertConfigChanged) {
+      this.refreshHighAlertTimer();
+    }
 
     this.saveConfig();
     this.notifyStateChange();
@@ -347,20 +417,86 @@ export class DisplayController {
     }, 3600000);
   }
 
+  private isHighWatts(watts: number): boolean {
+    return watts >= this.alertThresholdWatts;
+  }
+
+  private isRecoveredWatts(watts: number): boolean {
+    return watts < (this.alertThresholdWatts - this.alertRecoveryMarginWatts);
+  }
+
+  private startHighAlert(): void {
+    this.alertState = 'high';
+
+    // Immediate chime when entering HIGH.
+    this.soundManager.play('chime');
+
+    this.refreshHighAlertTimer();
+  }
+
+  private stopHighAlert(reason: string): void {
+    if (this.alertState !== 'high' && !this.alertTimerId) return;
+
+    this.alertState = 'normal';
+
+    if (this.alertTimerId) {
+      clearInterval(this.alertTimerId);
+      this.alertTimerId = null;
+    }
+
+    // Optional debug
+    // console.log('[DisplayController] stopHighAlert:', reason);
+  }
+
+  private refreshHighAlertTimer(): void {
+    // Only run timer while HIGH.
+    if (this.alertState !== 'high') {
+      if (this.alertTimerId) {
+        clearInterval(this.alertTimerId);
+        this.alertTimerId = null;
+      }
+      return;
+    }
+
+    // Restart timer with current interval.
+    if (this.alertTimerId) {
+      clearInterval(this.alertTimerId);
+      this.alertTimerId = null;
+    }
+
+    const intervalMs = Math.max(1, Math.floor(this.alertRepeatIntervalSec)) * 1000;
+
+    this.alertTimerId = window.setInterval(() => {
+      // Stop if stale (no readings for too long) to avoid endless noise.
+      const now = Date.now();
+      const staleMs = Math.max(1, Math.floor(this.alertStaleStopSec)) * 1000;
+      if (this.lastReadingAtMs > 0 && now - this.lastReadingAtMs >= staleMs) {
+        this.stopHighAlert('stale-readings');
+        return;
+      }
+
+      if (this.alertState === 'high') {
+        this.soundManager.play('chime');
+      }
+    }, intervalMs);
+  }
+
   /**
    * 電力データを処理
    */
   private handlePowerReading(event: PowerReadingEvent): void {
     console.log('[DisplayController] Power reading:', event.watts, 'W');
 
-    const previousPower = this._state.currentPower;
+    this.lastReadingAtMs = Date.now();
     this._state.currentPower = event;
 
-    // 閾値チェック: 超えた瞬間にアラート音
-    if (event.watts >= this.alertThresholdWatts) {
-      // 前回が閾値未満、または初回の場合のみ音を鳴らす
-      if (!previousPower || previousPower.watts < this.alertThresholdWatts) {
-        this.soundManager.play('alert');
+    if (this.alertState !== 'high') {
+      if (this.isHighWatts(event.watts)) {
+        this.startHighAlert();
+      }
+    } else {
+      if (this.isRecoveredWatts(event.watts)) {
+        this.stopHighAlert('recovered');
       }
     }
 

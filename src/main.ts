@@ -16,6 +16,8 @@ const settingsPanel = document.getElementById('settings-panel')!;
 const wsUrlInput = document.getElementById('ws-url') as HTMLInputElement;
 const sseUrlInput = document.getElementById('sse-url') as HTMLInputElement;
 const brightnessModeSelect = document.getElementById('brightness-mode') as HTMLSelectElement;
+const alertThresholdWattsInput = document.getElementById('alert-threshold-watts') as HTMLInputElement;
+const alertRepeatIntervalSecInput = document.getElementById('alert-repeat-interval-sec') as HTMLInputElement;
 const settingsSaveBtn = document.getElementById('settings-save')!;
 const settingsCloseBtn = document.getElementById('settings-close')!;
 
@@ -34,6 +36,12 @@ async function loadFileConfig(): Promise<Partial<DisplayConfig>> {
     if (j?.textColor) {
       if (typeof j.textColor.min === 'string') cfg.textColorMin = j.textColor.min;
       if (typeof j.textColor.max === 'string') cfg.textColorMax = j.textColor.max;
+    }
+    if (j?.alert) {
+      if (typeof j.alert.thresholdWatts === 'number') cfg.alertThresholdWatts = j.alert.thresholdWatts;
+      if (typeof j.alert.repeatIntervalSec === 'number') cfg.alertRepeatIntervalSec = j.alert.repeatIntervalSec;
+      if (typeof j.alert.staleStopSec === 'number') cfg.alertStaleStopSec = j.alert.staleStopSec;
+      if (typeof j.alert.recoveryMarginWatts === 'number') cfg.alertRecoveryMarginWatts = j.alert.recoveryMarginWatts;
     }
     return cfg;
   } catch {
@@ -183,6 +191,8 @@ async function bootstrap(): Promise<void> {
     wsUrlInput.value = controller.wsUrl;
     sseUrlInput.value = controller.sseUrl;
     brightnessModeSelect.value = controller.state.brightnessMode;
+    alertThresholdWattsInput.value = String(controller.getAlertThresholdWatts());
+    alertRepeatIntervalSecInput.value = String(controller.getAlertRepeatIntervalSec());
 
     // オーバーレイ
     overlay = document.createElement('div');
@@ -194,10 +204,15 @@ async function bootstrap(): Promise<void> {
   }
 
   settingsSaveBtn.addEventListener('click', () => {
+    const threshold = Number(alertThresholdWattsInput.value);
+    const repeatSec = Number(alertRepeatIntervalSecInput.value);
+
     controller.updateConfig({
       wsUrl: wsUrlInput.value.trim(),
       sseUrl: sseUrlInput.value.trim(),
       brightnessMode: brightnessModeSelect.value as 'auto' | 'light' | 'dark',
+      ...(Number.isFinite(threshold) ? { alertThresholdWatts: threshold } : {}),
+      ...(Number.isFinite(repeatSec) ? { alertRepeatIntervalSec: repeatSec } : {}),
     });
 
     hideSettings();

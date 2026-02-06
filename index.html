@@ -53,6 +53,15 @@
         <option value="dark">常に暗い</option>
       </select>
     </div>
+
+    <div class="setting-item">
+      <label>警告閾値 (W)</label>
+      <input type="number" id="alert-threshold-watts" inputmode="numeric" min="0" step="10" placeholder="1000">
+    </div>
+    <div class="setting-item">
+      <label>警告音 繰り返し間隔 (秒)</label>
+      <input type="number" id="alert-repeat-interval-sec" inputmode="numeric" min="1" step="1" placeholder="10">
+    </div>
     <div class="setting-actions">
       <button id="settings-save">保存</button>
       <button id="settings-close">閉じる</button>

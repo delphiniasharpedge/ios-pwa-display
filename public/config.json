@@ -6,5 +6,11 @@
   "textColor": {
     "min": "#374151",
     "max": "#ffffff"
+  },
+  "alert": {
+    "thresholdWatts": 1000,
+    "repeatIntervalSec": 10,
+    "staleStopSec": 60,
+    "recoveryMarginWatts": 0
   }
 }

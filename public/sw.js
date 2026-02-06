@@ -3,7 +3,7 @@
  */
 
 // Bump this when changing UI behavior so iOS PWA picks up updates.
-const CACHE_NAME = 'ios-pwa-display-v7';
+const CACHE_NAME = 'ios-pwa-display-v8';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

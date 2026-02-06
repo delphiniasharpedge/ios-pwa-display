@@ -132,6 +132,10 @@ PWAの挙動（明るさの閾値、文字色の最小/最大など）は `publi
 - `brightness.maxThreshold`: この値以上は 100% 扱い
 - `textColor.min`: 暗いときの文字色
 - `textColor.max`: 明るいときの文字色
+- `alert.thresholdWatts`: これ以上で危険域（HIGH）
+- `alert.repeatIntervalSec`: HIGHの間、この秒数ごとにチャイムを鳴らす
+- `alert.staleStopSec`: 電力イベントがこの秒数以上来ない場合は誤警報防止のため停止
+- `alert.recoveryMarginWatts`: 復帰マージン（`watt < threshold - margin` で復帰）
 
 `config.json` は `Service Worker` にキャッシュされないため、値を調整してリロードすると反映されます。
 
