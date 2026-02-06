@@ -75,14 +75,14 @@ export class SoundManager {
     }
   }
 
-  // 内蔵サウンド（Base64 エンコードされた短い音）
+  // 内蔵サウンド（短い音）
   private builtinSounds: Record<string, string> = {
     // シンプルなビープ音（440Hz, 0.1秒）
     default: this.generateBeepDataUrl(440, 0.1),
     // アラート音（880Hz, 0.2秒）
     alert: this.generateBeepDataUrl(880, 0.2),
-    // チャイム（複数音）
-    chime: this.generateBeepDataUrl(523, 0.15), // C5
+    // チャイム（耳に入りやすい音源へ差し替え）
+    chime: '/sounds/mixkit-alarm-clock-beep.wav',
   };
 
   get unlocked(): boolean {
@@ -239,7 +239,14 @@ export class SoundManager {
 
     const source = this.audioContext.createBufferSource();
     source.buffer = buffer;
-    source.connect(this.audioContext.destination);
+
+    // Slight gain boost so alerts are more noticeable.
+    const gain = this.audioContext.createGain();
+    gain.gain.value = 1.6;
+
+    source.connect(gain);
+    gain.connect(this.audioContext.destination);
+
     source.start(0);
   }
 }
