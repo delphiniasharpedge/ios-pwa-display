@@ -26,7 +26,7 @@
 ### Repeat behavior
 
 - `HIGH` の間は「鳴らし続ける」= **一定間隔で繰り返しチャイム**
-- v1 は `repeatIntervalSec=10` をデフォルトにする
+- v1 は `repeatIntervalSec=20` をデフォルトにする
 
 ### Safety stop (stale)
 

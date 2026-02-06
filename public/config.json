@@ -9,7 +9,7 @@
   },
   "alert": {
     "thresholdWatts": 1000,
-    "repeatIntervalSec": 10,
+    "repeatIntervalSec": 20,
     "staleStopSec": 60,
     "recoveryMarginWatts": 0,
     "announce": {

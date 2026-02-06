@@ -54,7 +54,7 @@ export type StateChangeHandler = (state: DisplayState) => void;
 const STORAGE_KEY = 'ios-pwa-display-config';
 // High wattage alert defaults
 const DEFAULT_ALERT_THRESHOLD_WATTS = 1000;
-const DEFAULT_ALERT_REPEAT_INTERVAL_SEC = 10;
+const DEFAULT_ALERT_REPEAT_INTERVAL_SEC = 20;
 const DEFAULT_ALERT_STALE_STOP_SEC = 60;
 const DEFAULT_ALERT_RECOVERY_MARGIN_WATTS = 0;
 const DEFAULT_ALERT_ANNOUNCE_ENABLED = true;
