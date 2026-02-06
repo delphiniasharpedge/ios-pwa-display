@@ -42,6 +42,11 @@ async function loadFileConfig(): Promise<Partial<DisplayConfig>> {
       if (typeof j.alert.repeatIntervalSec === 'number') cfg.alertRepeatIntervalSec = j.alert.repeatIntervalSec;
       if (typeof j.alert.staleStopSec === 'number') cfg.alertStaleStopSec = j.alert.staleStopSec;
       if (typeof j.alert.recoveryMarginWatts === 'number') cfg.alertRecoveryMarginWatts = j.alert.recoveryMarginWatts;
+
+      if (j.alert.announce) {
+        if (typeof j.alert.announce.enabled === 'boolean') cfg.alertAnnounceEnabled = j.alert.announce.enabled;
+        if (typeof j.alert.announce.message === 'string') cfg.alertAnnounceMessage = j.alert.announce.message;
+      }
     }
     return cfg;
   } catch {

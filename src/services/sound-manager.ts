@@ -10,6 +10,40 @@ export class SoundManager {
   private sounds = new Map<string, AudioBuffer>();
   private _unlocked = false;
 
+  isSpeaking(): boolean {
+    try {
+      return !!window.speechSynthesis && (window.speechSynthesis.speaking || window.speechSynthesis.pending);
+    } catch {
+      return false;
+    }
+  }
+
+  announce(text: string): void {
+    if (!this._unlocked) {
+      console.warn('[SoundManager] Not unlocked yet');
+      return;
+    }
+    if (!text || !text.trim()) return;
+    if (!('speechSynthesis' in window)) {
+      console.warn('[SoundManager] speechSynthesis not available');
+      return;
+    }
+
+    // Avoid overlapping announcements.
+    if (this.isSpeaking()) return;
+
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'ja-JP';
+      u.rate = 1.0;
+      u.pitch = 1.0;
+      u.volume = 1.0;
+      window.speechSynthesis.speak(u);
+    } catch (err) {
+      console.warn('[SoundManager] Failed to announce:', err);
+    }
+  }
+
   // 内蔵サウンド（Base64 エンコードされた短い音）
   private builtinSounds: Record<string, string> = {
     // シンプルなビープ音（440Hz, 0.1秒）

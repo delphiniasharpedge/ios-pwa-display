@@ -11,6 +11,10 @@
     "thresholdWatts": 1000,
     "repeatIntervalSec": 10,
     "staleStopSec": 60,
-    "recoveryMarginWatts": 0
+    "recoveryMarginWatts": 0,
+    "announce": {
+      "enabled": true,
+      "message": "消費電力が高くなっています。不要な家電の運転を停止してください。"
+    }
   }
 }
