@@ -82,8 +82,8 @@ export class SoundManager {
     default: this.generateBeepDataUrl(440, 0.1),
     // アラート音（880Hz, 0.2秒）
     alert: this.generateBeepDataUrl(880, 0.2),
-    // チャイム（耳に入りやすい音源へ差し替え）
-    chime: '/sounds/mixkit-alarm-clock-beep.wav',
+    // チャイム（初期の内蔵ビープに戻す）
+    chime: this.generateBeepDataUrl(523, 0.15), // C5
     // 音声アナウンス（macOS sayで生成）
     voice_high_wattage_ja: '/voice/high-wattage-ja.wav',
   };
@@ -249,13 +249,7 @@ export class SoundManager {
 
     const source = this.audioContext.createBufferSource();
     source.buffer = buffer;
-
-    // Slight gain boost so alerts are more noticeable.
-    const gain = this.audioContext.createGain();
-    gain.gain.value = 1.6;
-
-    source.connect(gain);
-    gain.connect(this.audioContext.destination);
+    source.connect(this.audioContext.destination);
 
     source.onended = () => {
       this.playing.delete(name);

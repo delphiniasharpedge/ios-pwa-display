@@ -3,12 +3,11 @@
  */
 
 // Bump this when changing UI behavior so iOS PWA picks up updates.
-const CACHE_NAME = 'ios-pwa-display-v12';
+const CACHE_NAME = 'ios-pwa-display-v13';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
-  '/sounds/mixkit-alarm-clock-beep.wav',
   '/voice/high-wattage-ja.wav',
 ];
 
