@@ -45,6 +45,8 @@ async function loadFileConfig(): Promise<Partial<DisplayConfig>> {
 
       if (j.alert.announce) {
         if (typeof j.alert.announce.enabled === 'boolean') cfg.alertAnnounceEnabled = j.alert.announce.enabled;
+        if (typeof j.alert.announce.mode === 'string') cfg.alertAnnounceMode = j.alert.announce.mode;
+        if (typeof j.alert.announce.soundName === 'string') cfg.alertAnnounceSoundName = j.alert.announce.soundName;
         if (typeof j.alert.announce.message === 'string') cfg.alertAnnounceMessage = j.alert.announce.message;
       }
     }

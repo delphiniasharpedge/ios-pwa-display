@@ -22,6 +22,8 @@ export interface DisplayConfig {
 
   // Voice announcement (optional)
   alertAnnounceEnabled: boolean;
+  alertAnnounceMode: 'speech' | 'audio';
+  alertAnnounceSoundName: string;
   alertAnnounceMessage: string;
 
   // Brightness calibration (raw 0..1 -> normalized 0..1)
@@ -56,6 +58,8 @@ const DEFAULT_ALERT_REPEAT_INTERVAL_SEC = 10;
 const DEFAULT_ALERT_STALE_STOP_SEC = 60;
 const DEFAULT_ALERT_RECOVERY_MARGIN_WATTS = 0;
 const DEFAULT_ALERT_ANNOUNCE_ENABLED = true;
+const DEFAULT_ALERT_ANNOUNCE_MODE: 'speech' | 'audio' = 'audio';
+const DEFAULT_ALERT_ANNOUNCE_SOUND_NAME = 'voice_high_wattage_ja';
 const DEFAULT_ALERT_ANNOUNCE_MESSAGE = '消費電力が高くなっています。不要な家電の運転を停止してください。';
 
 const DEFAULT_BRIGHTNESS_MIN_THRESHOLD = 0.2;
@@ -76,6 +80,8 @@ export class DisplayController {
   private alertStaleStopSec: number;
   private alertRecoveryMarginWatts: number;
   private alertAnnounceEnabled: boolean;
+  private alertAnnounceMode: 'speech' | 'audio';
+  private alertAnnounceSoundName: string;
   private alertAnnounceMessage: string;
 
   // Configurable brightness/text settings
@@ -125,6 +131,8 @@ export class DisplayController {
     this.alertStaleStopSec = savedConfig.alertStaleStopSec;
     this.alertRecoveryMarginWatts = savedConfig.alertRecoveryMarginWatts;
     this.alertAnnounceEnabled = savedConfig.alertAnnounceEnabled;
+    this.alertAnnounceMode = savedConfig.alertAnnounceMode;
+    this.alertAnnounceSoundName = savedConfig.alertAnnounceSoundName;
     this.alertAnnounceMessage = savedConfig.alertAnnounceMessage;
 
     this.brightnessMinThreshold = savedConfig.brightnessMinThreshold;
@@ -191,6 +199,8 @@ export class DisplayController {
       alertStaleStopSec: this.alertStaleStopSec,
       alertRecoveryMarginWatts: this.alertRecoveryMarginWatts,
       alertAnnounceEnabled: this.alertAnnounceEnabled,
+      alertAnnounceMode: this.alertAnnounceMode,
+      alertAnnounceSoundName: this.alertAnnounceSoundName,
       alertAnnounceMessage: this.alertAnnounceMessage,
 
       brightnessMinThreshold: this.brightnessMinThreshold,
@@ -217,6 +227,8 @@ export class DisplayController {
       alertStaleStopSec: baseConfig?.alertStaleStopSec ?? DEFAULT_ALERT_STALE_STOP_SEC,
       alertRecoveryMarginWatts: baseConfig?.alertRecoveryMarginWatts ?? DEFAULT_ALERT_RECOVERY_MARGIN_WATTS,
       alertAnnounceEnabled: baseConfig?.alertAnnounceEnabled ?? DEFAULT_ALERT_ANNOUNCE_ENABLED,
+      alertAnnounceMode: baseConfig?.alertAnnounceMode ?? DEFAULT_ALERT_ANNOUNCE_MODE,
+      alertAnnounceSoundName: baseConfig?.alertAnnounceSoundName ?? DEFAULT_ALERT_ANNOUNCE_SOUND_NAME,
       alertAnnounceMessage: baseConfig?.alertAnnounceMessage ?? DEFAULT_ALERT_ANNOUNCE_MESSAGE,
 
       brightnessMinThreshold: baseConfig?.brightnessMinThreshold ?? DEFAULT_BRIGHTNESS_MIN_THRESHOLD,
@@ -260,6 +272,8 @@ export class DisplayController {
           alertStaleStopSec: config.alertStaleStopSec ?? base.alertStaleStopSec,
           alertRecoveryMarginWatts: config.alertRecoveryMarginWatts ?? base.alertRecoveryMarginWatts,
           alertAnnounceEnabled: config.alertAnnounceEnabled ?? base.alertAnnounceEnabled,
+          alertAnnounceMode: config.alertAnnounceMode ?? base.alertAnnounceMode,
+          alertAnnounceSoundName: config.alertAnnounceSoundName ?? base.alertAnnounceSoundName,
           alertAnnounceMessage: config.alertAnnounceMessage ?? base.alertAnnounceMessage,
 
           brightnessMinThreshold: config.brightnessMinThreshold ?? base.brightnessMinThreshold,
@@ -314,6 +328,14 @@ export class DisplayController {
     }
     if (config.alertAnnounceEnabled !== undefined) {
       this.alertAnnounceEnabled = config.alertAnnounceEnabled;
+      alertConfigChanged = true;
+    }
+    if (config.alertAnnounceMode !== undefined) {
+      this.alertAnnounceMode = config.alertAnnounceMode;
+      alertConfigChanged = true;
+    }
+    if (config.alertAnnounceSoundName !== undefined) {
+      this.alertAnnounceSoundName = config.alertAnnounceSoundName;
       alertConfigChanged = true;
     }
     if (config.alertAnnounceMessage !== undefined) {
@@ -457,8 +479,15 @@ export class DisplayController {
     this.soundManager.play('chime');
 
     if (!this.alertAnnounceEnabled) return;
-    if (!msg) return;
 
+    if (this.alertAnnounceMode === 'audio') {
+      this.soundManager.play(this.alertAnnounceSoundName || 'voice_high_wattage_ja');
+      this.lastAnnounceAtMs = Date.now();
+      return;
+    }
+
+    // speech
+    if (!msg) return;
     this.soundManager.announce(msg);
     this.lastAnnounceAtMs = Date.now();
   }

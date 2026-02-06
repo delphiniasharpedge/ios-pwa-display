@@ -8,6 +8,7 @@
 export class SoundManager {
   private audioContext: AudioContext | null = null;
   private sounds = new Map<string, AudioBuffer>();
+  private playing = new Set<string>();
   private _unlocked = false;
 
   isSpeaking(): boolean {
@@ -83,6 +84,8 @@ export class SoundManager {
     alert: this.generateBeepDataUrl(880, 0.2),
     // チャイム（耳に入りやすい音源へ差し替え）
     chime: '/sounds/mixkit-alarm-clock-beep.wav',
+    // 音声アナウンス（macOS sayで生成）
+    voice_high_wattage_ja: '/voice/high-wattage-ja.wav',
   };
 
   get unlocked(): boolean {
@@ -220,22 +223,29 @@ export class SoundManager {
       return;
     }
 
+    // Avoid overlapping the same sound (esp. voice).
+    if (this.playing.has(name)) {
+      return;
+    }
+
     const buffer = this.sounds.get(name);
     if (!buffer) {
       console.warn(`[SoundManager] Sound not found: ${name}`);
       // デフォルトにフォールバック
       const defaultBuffer = this.sounds.get('default');
       if (defaultBuffer) {
-        this.playBuffer(defaultBuffer);
+        this.playBuffer('default', defaultBuffer);
       }
       return;
     }
 
-    this.playBuffer(buffer);
+    this.playBuffer(name, buffer);
   }
 
-  private playBuffer(buffer: AudioBuffer): void {
+  private playBuffer(name: string, buffer: AudioBuffer): void {
     if (!this.audioContext) return;
+
+    this.playing.add(name);
 
     const source = this.audioContext.createBufferSource();
     source.buffer = buffer;
@@ -246,6 +256,10 @@ export class SoundManager {
 
     source.connect(gain);
     gain.connect(this.audioContext.destination);
+
+    source.onended = () => {
+      this.playing.delete(name);
+    };
 
     source.start(0);
   }
