@@ -12,7 +12,15 @@ export interface DisplayConfig {
   wsUrl: string;
   sseUrl: string;
   brightnessMode: 'auto' | 'light' | 'dark';
-  alertThresholdWatts: number;  // この値を超えたらアラート
+  alertThresholdWatts: number; // この値を超えたらアラート
+
+  // Brightness calibration (raw 0..1 -> normalized 0..1)
+  brightnessMinThreshold: number; // raw <= this => 0%
+  brightnessMaxThreshold: number; // raw >= this => 100%
+
+  // Text color range (normalized brightness 0..1)
+  textColorMin: string; // dark
+  textColorMax: string; // bright
 }
 
 export interface DisplayState {
@@ -31,12 +39,23 @@ export type StateChangeHandler = (state: DisplayState) => void;
 const STORAGE_KEY = 'ios-pwa-display-config';
 const DEFAULT_ALERT_THRESHOLD = 2000; // 2000W
 
+const DEFAULT_BRIGHTNESS_MIN_THRESHOLD = 0.2;
+const DEFAULT_BRIGHTNESS_MAX_THRESHOLD = 0.8;
+const DEFAULT_TEXT_COLOR_MIN = '#4b5563';
+const DEFAULT_TEXT_COLOR_MAX = '#ffffff';
+
 export class DisplayController {
   private noSleep: NoSleepManager;
   private brightnessDetector: BrightnessDetector;
   private messageClient: MessageClient;
   private sseClient: SSEClient;
   private soundManager: SoundManager;
+
+  // Configurable brightness/text settings
+  private brightnessMinThreshold: number;
+  private brightnessMaxThreshold: number;
+  private textColorMin: string;
+  private textColorMax: string;
 
   private stateHandlers = new Set<StateChangeHandler>();
   private messageTimeoutId: number | null = null;
@@ -53,9 +72,9 @@ export class DisplayController {
     currentPower: null,
   };
 
-  constructor() {
-    // 設定を復元
-    const savedConfig = this.loadConfig();
+  constructor(baseConfig?: Partial<DisplayConfig>) {
+    // 設定を復元（baseConfig -> localStorage）
+    const savedConfig = this.loadConfig(baseConfig);
 
     this.noSleep = new NoSleepManager();
     this.brightnessDetector = new BrightnessDetector({
@@ -69,6 +88,11 @@ export class DisplayController {
 
     this._state.brightnessMode = savedConfig.brightnessMode;
     this.alertThresholdWatts = savedConfig.alertThresholdWatts;
+
+    this.brightnessMinThreshold = savedConfig.brightnessMinThreshold;
+    this.brightnessMaxThreshold = savedConfig.brightnessMaxThreshold;
+    this.textColorMin = savedConfig.textColorMin;
+    this.textColorMax = savedConfig.textColorMax;
 
     // WebSocket 接続状態の変更を監視
     this.messageClient.onConnectionChange((state) => {
@@ -110,6 +134,11 @@ export class DisplayController {
       sseUrl: this.sseClient.sseUrl,
       brightnessMode: this._state.brightnessMode,
       alertThresholdWatts: this.alertThresholdWatts,
+
+      brightnessMinThreshold: this.brightnessMinThreshold,
+      brightnessMaxThreshold: this.brightnessMaxThreshold,
+      textColorMin: this.textColorMin,
+      textColorMax: this.textColorMax,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
   }
@@ -117,28 +146,56 @@ export class DisplayController {
   /**
    * 設定を読み込み
    */
-  private loadConfig(): DisplayConfig {
+  private loadConfig(baseConfig?: Partial<DisplayConfig>): DisplayConfig {
+    const base: DisplayConfig = {
+      wsUrl: baseConfig?.wsUrl?.trim?.() || '',
+      sseUrl: (baseConfig?.sseUrl || '/events').trim(),
+      brightnessMode: baseConfig?.brightnessMode || 'auto',
+      alertThresholdWatts: baseConfig?.alertThresholdWatts ?? DEFAULT_ALERT_THRESHOLD,
+
+      brightnessMinThreshold: baseConfig?.brightnessMinThreshold ?? DEFAULT_BRIGHTNESS_MIN_THRESHOLD,
+      brightnessMaxThreshold: baseConfig?.brightnessMaxThreshold ?? DEFAULT_BRIGHTNESS_MAX_THRESHOLD,
+      textColorMin: baseConfig?.textColorMin ?? DEFAULT_TEXT_COLOR_MIN,
+      textColorMax: baseConfig?.textColorMax ?? DEFAULT_TEXT_COLOR_MAX,
+    };
+
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const config = JSON.parse(saved);
+
+        // Default to same-origin SSE so it works with HTTPS hosting (e.g. Tailscale Serve).
+        // Migration: if an old config points directly to http://<host>:8787/events and we're
+        // currently on HTTPS, switch to same-origin /events to avoid mixed content.
+        let sseUrl = (config.sseUrl || '').trim();
+        if (!sseUrl) {
+          sseUrl = '/events';
+        } else if (
+          typeof window !== 'undefined' &&
+          window.location?.protocol === 'https:' &&
+          /^http:\/\/[^\s/]+:8787\/events(\?.*)?$/.test(sseUrl)
+        ) {
+          sseUrl = '/events';
+        }
+
         return {
-          wsUrl: config.wsUrl || '',
-          sseUrl: config.sseUrl || '',
-          brightnessMode: config.brightnessMode || 'auto',
-          alertThresholdWatts: config.alertThresholdWatts || DEFAULT_ALERT_THRESHOLD,
+          ...base,
+          wsUrl: (config.wsUrl || base.wsUrl).trim(),
+          sseUrl,
+          brightnessMode: config.brightnessMode || base.brightnessMode,
+          alertThresholdWatts: config.alertThresholdWatts ?? base.alertThresholdWatts,
+
+          brightnessMinThreshold: config.brightnessMinThreshold ?? base.brightnessMinThreshold,
+          brightnessMaxThreshold: config.brightnessMaxThreshold ?? base.brightnessMaxThreshold,
+          textColorMin: config.textColorMin ?? base.textColorMin,
+          textColorMax: config.textColorMax ?? base.textColorMax,
         };
       }
     } catch (err) {
       console.warn('[DisplayController] Failed to load config:', err);
     }
     // デフォルト設定
-    return {
-      wsUrl: '',
-      sseUrl: '',
-      brightnessMode: 'auto',
-      alertThresholdWatts: DEFAULT_ALERT_THRESHOLD,
-    };
+    return base;
   }
 
   /**
@@ -162,6 +219,23 @@ export class DisplayController {
     if (config.alertThresholdWatts !== undefined) {
       this.alertThresholdWatts = config.alertThresholdWatts;
     }
+
+    if (config.brightnessMinThreshold !== undefined) {
+      this.brightnessMinThreshold = config.brightnessMinThreshold;
+    }
+    if (config.brightnessMaxThreshold !== undefined) {
+      this.brightnessMaxThreshold = config.brightnessMaxThreshold;
+    }
+    if (config.textColorMin !== undefined) {
+      this.textColorMin = config.textColorMin;
+    }
+    if (config.textColorMax !== undefined) {
+      this.textColorMax = config.textColorMax;
+    }
+
+    // Re-apply current brightness after config changes.
+    this.applyBrightness(this._state.ambientLevel);
+
     this.saveConfig();
     this.notifyStateChange();
   }
@@ -182,7 +256,8 @@ export class DisplayController {
 
     // 3. 明るさ検出を開始（カメラ許可を求める）
     if (this._state.brightnessMode === 'auto') {
-      const available = await this.brightnessDetector.start((level) => {
+      const available = await this.brightnessDetector.start((rawLevel) => {
+        const level = this.normalizeBrightness(rawLevel);
         this._state.ambientLevel = level;
         this.applyBrightness(level);
         this.notifyStateChange();
@@ -213,6 +288,50 @@ export class DisplayController {
     console.log('[DisplayController] Initialized');
   }
 
+  private clamp01(v: number): number {
+    if (Number.isNaN(v)) return 0;
+    return Math.max(0, Math.min(1, v));
+  }
+
+  private normalizeBrightness(raw: number): number {
+    const min = this.brightnessMinThreshold;
+    const max = this.brightnessMaxThreshold;
+    if (max <= min) return this.clamp01(raw);
+    const t = (raw - min) / (max - min);
+    return this.clamp01(t);
+  }
+
+  private parseHexColor(hex: string): { r: number; g: number; b: number } {
+    const s = hex.trim().replace(/^#/, '');
+    const v = s.length === 3
+      ? s.split('').map((c) => c + c).join('')
+      : s;
+    if (!/^[0-9a-fA-F]{6}$/.test(v)) {
+      // fallback to white
+      return { r: 255, g: 255, b: 255 };
+    }
+    const n = parseInt(v, 16);
+    return {
+      r: (n >> 16) & 0xff,
+      g: (n >> 8) & 0xff,
+      b: n & 0xff,
+    };
+  }
+
+  private lerp(a: number, b: number, t: number): number {
+    return a + (b - a) * t;
+  }
+
+  private lerpColor(minHex: string, maxHex: string, t: number): string {
+    const a = this.parseHexColor(minHex);
+    const b = this.parseHexColor(maxHex);
+    const tt = this.clamp01(t);
+    const r = Math.round(this.lerp(a.r, b.r, tt));
+    const g = Math.round(this.lerp(a.g, b.g, tt));
+    const bb = Math.round(this.lerp(a.b, b.b, tt));
+    return `rgb(${r}, ${g}, ${bb})`;
+  }
+
   /**
    * 明るさを適用
    */
@@ -221,20 +340,25 @@ export class DisplayController {
 
     switch (this._state.brightnessMode) {
       case 'light':
-        effectiveLevel = 0.9;
+        effectiveLevel = 1;
         break;
       case 'dark':
-        effectiveLevel = 0.1;
+        effectiveLevel = 0;
         break;
       case 'auto':
       default:
-        effectiveLevel = level;
+        effectiveLevel = this.clamp01(level);
     }
 
     document.documentElement.style.setProperty(
       '--ambient-brightness',
       effectiveLevel.toFixed(2)
     );
+
+    // Spec: background stays black; only text color changes.
+    // Color is interpolated between min..max by brightness.
+    const textColor = this.lerpColor(this.textColorMin, this.textColorMax, effectiveLevel);
+    document.documentElement.style.setProperty('--ambient-text-color', textColor);
   }
 
   /**

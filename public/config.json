@@ -1,0 +1,10 @@
+{
+  "brightness": {
+    "minThreshold": 0.2,
+    "maxThreshold": 0.5
+  },
+  "textColor": {
+    "min": "#374151",
+    "max": "#ffffff"
+  }
+}

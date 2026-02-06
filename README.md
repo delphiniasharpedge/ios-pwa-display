@@ -71,13 +71,15 @@ curl -X POST http://localhost:8080/send \
 
 ### 4. サーバー Web UI
 
-ブラウザで `http://localhost:8080` を開くと、簡易送信UIが使える。
+- `http://localhost:8080/admin` を開くと、簡易送信UIが使える。
+- `dist/`（ビルド成果物）がある場合は `http://localhost:8080/` でPWAも配信される。
 
 ## 電力(SSE)インターフェース（合意済み）
 
-PWA は remo-e の SSE を直接購読します。
+PWA は remo-e の SSE を購読します。
 
-- Endpoint: `GET http://<mac-ip>:8787/events`
+- 推奨（同一オリジン）: `GET http://localhost:8080/events`（サーバが remo-e をプロキシ）
+- 直接購読する場合: `GET http://<mac-ip>:8787/events`
 - Content-Type: `text/event-stream`
 - Event name: `message`
 - Payload:
@@ -119,6 +121,17 @@ interface DisplayMessage {
 1. Safari で開く
 2. 共有ボタン → 「ホーム画面に追加」
 3. ホーム画面から起動するとフルスクリーンで動作
+
+## 設定ファイル（config.json）
+
+PWAの挙動（明るさの閾値、文字色の最小/最大など）は `public/config.json` で指定できます。
+
+- `brightness.minThreshold`: この値以下は 0% 扱い
+- `brightness.maxThreshold`: この値以上は 100% 扱い
+- `textColor.min`: 暗いときの文字色
+- `textColor.max`: 明るいときの文字色
+
+`config.json` は `Service Worker` にキャッシュされないため、値を調整してリロードすると反映されます。
 
 ## 本番デプロイ
 
